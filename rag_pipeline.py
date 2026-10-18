@@ -41,7 +41,7 @@ LLM_PROVIDER = os.getenv("LLM_PROVIDER", "gemini").lower()
 # These vectors are stored and searched using ChromaDB.
 
 embeddings_model = GoogleGenerativeAIEmbeddings(
-    model="gemini-embedding-001"
+    model="gemini-embedding-2"
 )
 
 

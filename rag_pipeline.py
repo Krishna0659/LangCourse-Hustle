@@ -55,7 +55,7 @@ if LLM_PROVIDER == "gemini":
         raise ValueError("GOOGLE_API_KEY is missing from your .env file.")
 
     llm = ChatGoogleGenerativeAI(
-        model="gemini-2.5-flash",
+        model="gemini-3.8-flash",
         temperature=0.2,
     )
 

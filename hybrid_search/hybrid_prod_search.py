@@ -106,4 +106,15 @@ test_queries = [
     'Which router support wifi 6?'
 ]
 
+for query in test_queries : 
+    print('=' * 60)
+
+    #vector only
+    vector_results = test_query(query, 'VECTOR', vector_retriever)
+
+    #BM25 only
+    bm25_results = test_query(query, 'BM25', bm25_retriever)
+
+    #hybrid search 
+    hybrid_results = test_query(query, 'HYBRID', ensemble_retriever)
 

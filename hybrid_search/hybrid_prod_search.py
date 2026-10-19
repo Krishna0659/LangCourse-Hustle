@@ -87,3 +87,23 @@ ensemble_retriever = EnsembleRetriever(
 )
 
 print('Hybrid retriever ready')
+
+def test_query(query, name, retriever):
+    '''Test a query and show results'''
+    results = retriever.invoke(query)
+    print(f'\\n{name} - Query: \"{query}\"')
+    for i, doc in enumerate(results[:3]):
+        preview = doc.page_content[:80] + '...'
+        print(f' {i+1}. {preview}')
+    return results 
+
+test_queries = [
+    'SKU-7742X specifications',
+    'E_CONN_REFUSED error',
+    'how to configure static IP',
+    'firmware update process for SKU-8821A',
+    '401 authentication error',
+    'Which router support wifi 6?'
+]
+
+

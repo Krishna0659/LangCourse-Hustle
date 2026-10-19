@@ -1,6 +1,7 @@
-from langchain_chroma import chroma 
+from langchain_chroma import Chroma 
 from langchain_openai import ChatOpenAI
-from langchain_community.retrievers import BM25Retriever, EnsembleRetriever
+from langchain_community.retrievers import BM25Retriever
+from langchain_classic.retrievers import EnsembleRetriever
 from langchain_core.documents import Document
 from langchain_google_genai import GoogleGenerativeAIEmbeddings
 
@@ -8,10 +9,12 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
+#embedding model chosen
 embeddings =  GoogleGenerativeAIEmbeddings(
     model="gemini-embedding-2"
 )
 
+#data creation as document 
 documents = [
     Document(
         page_content="Product SKU-7742X is our flagship router. It supports gigabit speeds and advanced QoS features.",
@@ -56,3 +59,31 @@ documents = [
 ]
 
 print(f'Loaded {len(documents)} documents')
+
+#made the db 
+vectorstore = Chroma.from_documents(
+    documents,
+    embeddings,
+    collection_name = 'hybrid_test'
+)
+
+#vector retriever
+vector_retriever = vectorstore.as_retriever(
+    search_kwargs= {'k' : 3}
+)
+
+print('Vector retriever ready')
+
+#bm25 retriever 
+bm25_retriever = BM25Retriever.from_documents(documents, k = 3)
+
+print('BM25 retriever ready')
+
+# ensembleRetriever now coming 
+ensemble_retriever = EnsembleRetriever(
+    retrievers=[vector_retriever, bm25_retriever],
+    weights=[0.5, 0.5], #weight is decided here 
+    c = 60 #the smoothing constant or damping constant 
+)
+
+print('Hybrid retriever ready')

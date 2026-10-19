@@ -198,7 +198,7 @@ say "I don't know."
     questions = [
         "What is LangChain?",
         "Who created LangChain?",
-        "What is LangGraph used for?",
+        "Is LangChain paid or unpaid ?",
     ]
 
     print("\n========== BASIC RAG DEMO ==========\n")
@@ -544,8 +544,8 @@ if __name__ == "__main__":
 
     # Uncomment ONE demo at a time.
 
-    demo_basic_rag()
-    # demo_rag_with_sources()
+    #demo_basic_rag()
+    demo_rag_with_sources()
     # demo_rag_with_fallback()
     # demo_structured_rag()
 

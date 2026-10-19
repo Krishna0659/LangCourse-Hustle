@@ -1,3 +1,5 @@
+import os
+from typing import List
 from langchain_chroma import Chroma 
 from langchain_openai import ChatOpenAI
 from langchain_community.retrievers import BM25Retriever
@@ -9,112 +11,284 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-#embedding model chosen
-embeddings =  GoogleGenerativeAIEmbeddings(
-    model="gemini-embedding-2"
-)
+# MANUAL WEIGHTED RECIPROCAL RANK FUSION
 
-#data creation as document 
-documents = [
-    Document(
-        page_content="Product SKU-7742X is our flagship router. It supports gigabit speeds and advanced QoS features.",
-        metadata={"type": "product"}
-    ),
-    Document(
-        page_content="Error code E_CONN_REFUSED indicates the server rejected the connection. Check firewall settings.",
-        metadata={"type": "error"}
-    ),
-    Document(
-        page_content="For network connectivity issues, first check the ethernet cable and router status lights.",
-        metadata={"type": "troubleshooting"}
-    ),
-    Document(
-        page_content="Authentication error E_AUTH_401 indicates invalid credentials. Verify your username, password, and API token.",
-        metadata={"type": "auth"}
-    ),
-    Document(
-        page_content="To configure a static IP address, open network settings and enter the IP address, subnet mask, gateway, and DNS server.",
-        metadata={"type": "config"}
-    ),
-    Document(
-        page_content="All network devices must comply with the organization's security policy, including approved firmware and encrypted management connections.",
-        metadata={"type": "compliance"}
-    ),
-    Document(
-        page_content="Product SKU-8821A is a dual-band Wi-Fi 6 router with four gigabit LAN ports and WPA3 security.",
-        metadata={"type": "product"}
-    ),
-    Document(
-        page_content="Error code E_TIMEOUT_504 means the server did not respond within the allowed time limit.",
-        metadata={"type": "error"}
-    ),
-    Document(
-        page_content="If your router frequently disconnects, restart it, inspect the cables, and check whether its firmware is up to date.",
-        metadata={"type": "troubleshooting"}
-    ),
-    Document(
-        page_content="Administrator access requires multi-factor authentication. Never share passwords, API keys, or recovery codes with unauthorized users.",
-        metadata={"type": "auth"}
-    ),
-]
+def hybrid_retrieve(query, retrievers, weights, k=3, rrf_k=60):
+    """Combine multiple retrievers using weighted Reciprocal Rank Fusion."""
 
-print(f'Loaded {len(documents)} documents')
+    doc_scores = {}
 
-#made the db 
-vectorstore = Chroma.from_documents(
-    documents,
-    embeddings,
-    collection_name = 'hybrid_test'
-)
+    for retriever, weight in zip(retrievers, weights):
+        results = retriever.invoke(query)
 
-#vector retriever
-vector_retriever = vectorstore.as_retriever(
-    search_kwargs= {'k' : 3}
-)
+        for rank, doc in enumerate(results):
+            # Use page content as the document identifier
+            key = doc.page_content
 
-print('Vector retriever ready')
+            # Weighted RRF score
+            rrf_score = weight * (1.0 / (rank + rrf_k))
 
-#bm25 retriever 
-bm25_retriever = BM25Retriever.from_documents(documents, k = 3)
+            if key in doc_scores:
+                doc_scores[key] = (
+                    doc_scores[key][0] + rrf_score,
+                    doc
+                )
+            else:
+                doc_scores[key] = (rrf_score, doc)
 
-print('BM25 retriever ready')
+    # Sort documents by descending RRF score
+    sorted_docs = sorted(
+        doc_scores.values(),
+        key=lambda x: x[0],
+        reverse=True
+    )
 
-# ensembleRetriever now coming 
-ensemble_retriever = EnsembleRetriever(
-    retrievers=[vector_retriever, bm25_retriever],
-    weights=[0.5, 0.5], #weight is decided here 
-    c = 60 #the smoothing constant or damping constant 
-)
+    return [doc for _, doc in sorted_docs[:k]]
 
-print('Hybrid retriever ready')
 
-def test_query(query, name, retriever):
-    '''Test a query and show results'''
-    results = retriever.invoke(query)
-    print(f'\\n{name} - Query: \"{query}\"')
-    for i, doc in enumerate(results[:3]):
-        preview = doc.page_content[:80] + '...'
-        print(f' {i+1}. {preview}')
-    return results 
+# HYBRID RETRIEVER
 
-test_queries = [
-    'SKU-7742X specifications',
-    'E_CONN_REFUSED error',
-    'how to configure static IP',
-    'firmware update process for SKU-8821A',
-    '401 authentication error',
-    'Which router support wifi 6?'
-]
+class HybridRetriever:
+    """Hybrid retriever combining BM25 and vector search."""
 
-for query in test_queries : 
-    print('=' * 60)
+    def __init__(
+        self,
+        documents: List[Document],
+        bm25_weight: float = 0.5,
+        k: int = 4
+    ):
 
-    #vector only
-    vector_results = test_query(query, 'VECTOR', vector_retriever)
+        if not 0 <= bm25_weight <= 1:
+            raise ValueError("bm25_weight must be between 0 and 1.")
 
-    #BM25 only
-    bm25_results = test_query(query, 'BM25', bm25_retriever)
+        if k < 1:
+            raise ValueError("k must be at least 1.")
 
-    #hybrid search 
-    hybrid_results = test_query(query, 'HYBRID', ensemble_retriever)
+        if not documents:
+            raise ValueError("At least one document is required.")
 
+        self.k = k
+        self.bm25_weight = bm25_weight
+        self.vector_weight = 1 - bm25_weight
+
+        # ----------------------------------------------------
+        # Initialize embedding model
+        # ----------------------------------------------------
+
+        self.embeddings =  GoogleGenerativeAIEmbeddings(
+            model="gemini-embedding-2"
+        )
+
+        # ----------------------------------------------------
+        # Create Chroma vector store
+        # ----------------------------------------------------
+
+        self.vectorstore = Chroma.from_documents(
+            documents=documents,
+            embedding=self.embeddings,
+            collection_name="hybrid_search"
+        )
+
+        self.vector_retriever = self.vectorstore.as_retriever(
+            search_kwargs={"k": k}
+        )
+
+        # ----------------------------------------------------
+        # Create BM25 retriever
+        # ----------------------------------------------------
+
+        self.bm25_retriever = BM25Retriever.from_documents(
+            documents,
+            k=k
+        )
+
+    # SEARCH
+
+    def search(self, query: str) -> List[Document]:
+        """Run hybrid search using weighted RRF."""
+
+        return hybrid_retrieve(
+            query=query,
+            retrievers=[
+                self.bm25_retriever,
+                self.vector_retriever
+            ],
+            weights=[
+                self.bm25_weight,
+                self.vector_weight
+            ],
+            k=self.k,
+            rrf_k=60
+        )
+
+
+    # ADD DOCUMENTS
+
+    def add_documents(self, documents: List[Document]):
+        """Add documents to Chroma and rebuild the BM25 retriever."""
+
+        if not documents:
+            return
+
+        # Add new documents to Chroma
+        self.vectorstore.add_documents(documents)
+
+        # Retrieve all current documents from Chroma
+        all_docs = self.vectorstore.get(
+            include=["documents", "metadatas"]
+        )
+
+        # Reconstruct LangChain Document objects
+        stored_documents = [
+            Document(
+                page_content=content,
+                metadata=metadata or {}
+            )
+            for content, metadata in zip(
+                all_docs["documents"],
+                all_docs["metadatas"]
+            )
+        ]
+
+        # Rebuild BM25 using all documents
+        self.bm25_retriever = BM25Retriever.from_documents(
+            stored_documents,
+            k=self.k
+        )
+
+
+# ============================================================
+# MAIN: DEMONSTRATION
+# ============================================================
+
+if __name__ == "__main__":
+
+    documents = [
+        Document(
+            page_content=(
+                "Product SKU-7742X is our flagship router. "
+                "It supports gigabit speeds and advanced QoS features."
+            ),
+            metadata={"type": "product"}
+        ),
+
+        Document(
+            page_content=(
+                "Error code E_CONN_REFUSED indicates the server "
+                "rejected the connection. Check firewall settings."
+            ),
+            metadata={"type": "error"}
+        ),
+
+        Document(
+            page_content=(
+                "For network connectivity issues, first check "
+                "the ethernet cable and router status lights."
+            ),
+            metadata={"type": "troubleshooting"}
+        ),
+
+        Document(
+            page_content=(
+                "Authentication error E_AUTH_401 indicates invalid "
+                "credentials. Verify your username and API token."
+            ),
+            metadata={"type": "auth"}
+        ),
+
+        Document(
+            page_content=(
+                "To configure a static IP address, enter the IP "
+                "address, subnet mask, gateway, and DNS server."
+            ),
+            metadata={"type": "config"}
+        ),
+
+        Document(
+            page_content=(
+                "All network devices must comply with the "
+                "organization's security policy."
+            ),
+            metadata={"type": "compliance"}
+        ),
+
+        Document(
+            page_content=(
+                "Product SKU-8821A is a dual-band Wi-Fi 6 router "
+                "with four gigabit LAN ports and WPA3 security."
+            ),
+            metadata={"type": "product"}
+        ),
+
+        Document(
+            page_content=(
+                "Error code E_TIMEOUT_504 means the server did "
+                "not respond within the allowed time limit."
+            ),
+            metadata={"type": "error"}
+        ),
+
+        Document(
+            page_content=(
+                "If your router frequently disconnects, restart it "
+                "and check whether its firmware is up to date."
+            ),
+            metadata={"type": "troubleshooting"}
+        ),
+
+        Document(
+            page_content=(
+                "Administrator access requires multi-factor "
+                "authentication. Never share passwords or API keys."
+            ),
+            metadata={"type": "auth"}
+        ),
+    ]
+    # Initialize hybrid retriever
+    hybrid = HybridRetriever(
+        documents=documents,
+        bm25_weight=0.5,
+        k=4
+    )
+
+    # Run hybrid search
+    query = "What does E_CONN_REFUSED mean?"
+
+    results = hybrid.search(query)
+
+    print(f"\nQuery: {query}")
+    print("\nHybrid Search Results:\n")
+
+    for i, doc in enumerate(results, start=1):
+        print(f"{i}. {doc.page_content}")
+        print(f"   Metadata: {doc.metadata}\n")
+
+    # --------------------------------------------------------
+    # Add a new document
+    # --------------------------------------------------------
+
+    new_documents = [
+        Document(
+            page_content=(
+                "Error E_DNS_FAILURE indicates that the domain "
+                "name could not be resolved by the DNS server."
+            ),
+            metadata={"type": "error"}
+        )
+    ]
+
+    hybrid.add_documents(new_documents)
+
+    print("\nNew document added successfully!")
+
+    # Search again after updating the documents
+    query = "What causes DNS resolution failures?"
+
+    results = hybrid.search(query)
+
+    print(f"\nQuery: {query}")
+    print("\nUpdated Hybrid Search Results:\n")
+
+    for i, doc in enumerate(results, start=1):
+        print(f"{i}. {doc.page_content}")
+        print(f"   Metadata: {doc.metadata}\n")
